@@ -1,0 +1,313 @@
+# Description:
+# OpenVAS task scheduler script for gvm-pyshell (part of the gvm-tools package)
+# This script is used to start tasks which haven't run in over a month.
+# Use the gvm get_tasks() method to read in XML information about all the tasks.
+#
+# Release date:
+# 18-08-2017
+#
+# Version:
+# 1.0
+#
+# Authors:
+# Thijs Stuurman <thijs.stuurman@internedservices.nl>
+#
+# Required packages:
+# python3-urwid python3-dateutil
+#
+# Run example (works great inside a screen session):
+# gvm-pyshell tls --hostname 127.0.0.1 --port 9390 --gmp-username admin \
+# --gmp-password xxx ./scheduler.gmp
+#
+# Limitations:
+# The scheduler will not assign tasks to other (slave) scanners. In the authors
+# case the (slave) scanner assignment per task is done beforehand on network
+# reachability.
+#
+# Known issues:
+# Using urwid for the console GUI but it does not nicely redraw the screen during
+# alarm # sequence (the check/update process). Scaling resets/works again when the
+# program is in it's Idle state.
+#
+# Additional information:
+#  - loopTimerSeconds = 300
+#    Seconds to wait untill checking task information to try and run new tasks if
+#    resources are available
+#  - maxTasksPerSlave = 2
+#     Number of tasks a (slave) scanner may run concurrently; 2 seems to work out
+#     ok in practice
+#  - "monthOld = datetime.today() + relativedelta(months=-1)"
+#     The code line which decides if a task should run. This can be adjusted to
+#     your own needs. (daily? weekly?...)
+#  - see daysEnabled, hourStart and hourStop to customize task starting constraints
+#
+# Future work:
+#   - Make better use of urwid to create a nicer GUI
+#     (progress bars, better layout...)
+#   - Use task last_report start and end information to calculate estimated runtime
+#     of the task and to-run tasks
+#   - Clean up code
+#
+
+import time, urwid, _thread
+from datetime import datetime, date, timedelta
+from dateutil.relativedelta import *
+
+# global variables
+daysEnabled = [0,1,2,3,4]   # days of the week during which the scheduler may start tasks
+hourStart = 9               # start tasks between ... hours
+hourStop = 17               # and ... hours
+loopTimerSeconds = 300      # Wait time between task status checks
+maxTasksPerSlave = 2        # Max running tasks per (slave) scanner
+taskCount = 0               # task counter
+openvasTasksXML = None      # Object to dump the XML data
+scanSlaves = {}             # slave scanner name, task count
+slaveJobsLeft = {}          # slave scanner name, tasks left this month count
+todoTasks = {}              # taskname, taskID
+runningTasks = {}           # taskname, status
+taskSlave = {}              # taskname, slavename
+
+# GUI Exit handler
+def exit_on_q(key):
+    if key in ('q', 'Q'):
+        raise urwid.ExitMainLoop()
+
+# Create one big string with newlines to show all the information
+def createDisplay(status="Unknown"):
+    global taskCount, loopTimerSeconds, scanSlaves, slaveJobsLeft, runningTasks
+
+    tasksLeft = 0
+    for slave, count in slaveJobsLeft.items():
+        tasksLeft += count
+
+    display=""
+    display=display + "Tasks        : " + str(taskCount) + "\n"
+    display=display + "Tasks left   : " + str(tasksLeft) + "\n"
+    display=display + "Refreshrate  : " + str(loopTimerSeconds) + "\n"
+    display=display + "Status       : " + status + "\n"
+    display=display + "Slaves       : " + "\n"
+
+    # urwid Text widget doesn't do \t tab's to align some text
+    # We fix it ourselfs
+    maxLenght = 0
+    for slave, count in scanSlaves.items():
+        if len(slave) > maxLenght:
+            maxLength = len(slave)
+    currentAlign = 0
+    for slave, count in scanSlaves.items():
+        currentAlign = maxLength - len(slave)
+        stringAlign = ""
+        for x in range(0, currentAlign):
+            stringAlign = stringAlign + " "
+        display=display + "  - " + slave + stringAlign + ": " + str(count) + " tasks, jobs left this month: " + str(slaveJobsLeft[slave]) + "\n"
+
+    display=display + "\n\n"
+    display=display + "Running tasks:      " + "\n"
+
+        # Again fix alignment
+    maxLength = 0
+    for taskName, taskStatus in runningTasks.items():
+        if len(taskName) > maxLength:
+            maxLength = len(taskName)
+    currentAlign = 0
+    for taskName, taskStatus in runningTasks.items():
+        currentAlign = maxLength - len(taskName)
+        stringAlign = ""
+        for x in range(0, currentAlign):
+            stringAlign = stringAlign + " "
+        display=display + "  - " + taskName + stringAlign + ": " + str(taskStatus) + "% on " + str(taskSlave[taskName]) + "\n"
+
+    return display
+
+# Update the screen with new Status string
+def updateStatus(statusString):
+    mainTxt.set_text(createDisplay(statusString))
+    loop.draw_screen()
+
+# Main scheduler program loop, called by urwid alarm every loopTimerSeconds
+def scheduleRun(*args):
+    global loopTimerSeconds, todoTasks
+
+    while 1:
+        scheduleEnabled = 0
+        # check if we may run
+        if date.today().weekday() in daysEnabled and datetime.today().hour >= hourStart and datetime.today().hour <= hourStop:
+            scheduleEnabled = 1
+        else:
+            scheduleEnabled = 0
+
+        updateStatus("Updating tasks status information...")
+        time.sleep(1)
+        updateTaskInformation()
+
+        if len(todoTasks) > 0 and scheduleEnabled == 1:
+            updateStatus("Attempting to starting new tasks...")
+            time.sleep(1)
+            startTasks()
+
+        if scheduleEnabled == 1:
+            statusString = "Idle... (scheduling enabled)"
+        else:
+            statusString = "Idle... (scheduling disabled, monitoring only)"
+
+        # Countdown wait...
+        for i in range(loopTimerSeconds, 0, -1):
+            updateStatus((statusString + " - Refresh in: " + str(i) +" seconds"))
+            time.sleep(1)
+
+# Try to start new tasks
+def startTasks():
+    global scanSlaves, todoTasks, runningTasks, maxTasksPerSlave, taskSlave
+
+    updateStatus("Checking tasks...")
+    time.sleep(1)
+    tmpCount = {}
+    scanSlaveSpace = {}
+
+    # count current running jobs per slave scanner, set values to 0 first
+    for taskName, taskStatus in runningTasks.items():
+        slaveName = taskSlave[taskName]
+        tmpCount[slaveName] = 0
+    for taskName, taskStatus in runningTasks.items():
+        slaveName = taskSlave[taskName]
+        tmpCount[slaveName] += 1
+
+    #Populate scanSlaveSpace with scanners and max available jobs
+    for slaveName in scanSlaves.keys():
+        scanSlaveSpace[slaveName] = maxTasksPerSlave
+
+    #Remove space for jobs which are currently running
+    for slaveName, runningtaskCount in tmpCount.items():
+        if runningtaskCount <= maxTasksPerSlave:
+            scanSlaveSpace[slaveName] = (maxTasksPerSlave - runningtaskCount)
+            if scanSlaveSpace[slaveName] == 0:
+                del scanSlaveSpace[slaveName]
+
+    #scanSlaveSpace now holds slavenames with resources left and how many
+    while len(scanSlaveSpace) > 0 and len(todoTasks) > 0:
+        time.sleep(1)
+        # pop arbitrary todoTasks out of the dictionary
+        taskItem = todoTasks.popitem()
+        taskname = taskItem[0]
+        taskID = taskItem[1]
+        if taskSlave[taskname] in scanSlaveSpace.keys():
+            slaveName = taskSlave[taskname]
+            if scanSlaveSpace[slaveName] > 0:
+                updateStatus("There is room on " + taskSlave[taskname] + " for task " + taskname + ", starting task with task ID: " + taskID)
+                time.sleep(1)
+                scanSlaveSpace[slaveName] -= 1
+                # start task
+                gmp.start_task(taskID)
+                if scanSlaveSpace[slaveName] == 0:
+                    del scanSlaveSpace[slaveName]
+                time.sleep(3)   # avoid flood starting new jobs at once
+
+# Get the task XML information
+def updateTaskInformation():
+    global openvasTasksXML
+
+    updateStatus("Getting task and status information... (may take 30 seconds)")
+    openvasTasksXML = gmp.get_tasks()
+    updateStatus("Processing task and status information...")
+    time.sleep(1)
+    processTasksXML()
+
+# Process tasks XML and fill dictonaries with required information
+def processTasksXML():
+    global openvasTasksXML, taskCount, scanSlaves, slaveJobsLeft, todoTasks, runningTasks, taskSlave
+
+    # Reset variables
+    taskCount = 0
+    scanSlaves = {}
+    slaveJobsLeft = {}
+    todoTasks = {}
+    runningTasks = {}
+    taskSlave = {}
+    taskIdle = 1
+
+    # Process XML
+    for element in openvasTasksXML:
+        if element.tag == 'task':
+
+                        # Reset variables
+            taskCount += 1
+            taskID = element.get('id')     # Required to actually start a task
+            taskRunning = 0
+            taskName = "unknown"
+            taskIdle = 1
+
+                        # loop task element details
+                        # get name, scanner, status, progress and lastrun information
+            for taskDetail in element:
+                if taskDetail.tag == "name":
+                    taskName = taskDetail.text
+                if taskDetail.tag == "scanner":
+                    for element in taskDetail:
+                        if element.tag == "name":
+                            taskSlave[taskName] = element.text      # couple task to slave in dict
+                            tmptaskName = element.text
+                            if tmptaskName in scanSlaves:           # Add slave and count tasks for slave
+                                scanSlaves[tmptaskName] += 1
+                            else:
+                                scanSlaves[tmptaskName] = 1
+                                slaveJobsLeft[tmptaskName] = 0
+                if taskDetail.tag == "status":
+                    if taskDetail.text != "Done":
+                        taskIdle = 0
+                        runningTasks[taskName] = 0
+                if taskDetail.tag == "progress":
+                         if taskIdle == 0:
+                            runningTasks[taskName] = taskDetail.text
+
+                # Find lastrun information and decide if tasks needs to run
+                if taskDetail.tag == "last_report":
+                    for lastreport in taskDetail:
+                        for reportDetails in lastreport:
+                            if reportDetails.tag == "timestamp":
+                                dateString=reportDetails.text.split('T')[0]     #'2017-06-29T12:39:03+02:00'
+                                lastrunDatetimeObject = datetime.strptime(dateString,'%Y-%m-%d')
+                                monthOld = datetime.today() + relativedelta(months=-1)
+                                if lastrunDatetimeObject < monthOld:
+                                    taskAge="old"
+                                    if taskIdle == 1:
+                                        slaveJobsLeft[tmptaskName] += 1 # count tasks(jobs) left per slave
+                                        todoTasks[taskName] = taskID    # Register todo job
+                                else:
+                                    taskAge="ok"
+
+#####
+# Start of the program
+#####
+# Setup urwid GUI
+# Using the Frame widget to show 3 widgets
+###
+# Color palette
+palette = [('mainbg', 'white', 'dark blue'),
+           ('headerbg', 'black', 'dark red'),
+           ('headertxt', 'light green', 'black'),
+           ('footertxt', 'white', 'dark red')]
+
+# Setup a txt widget; this will hold the 'main' information text
+mainTxt = urwid.Text(createDisplay(), align='left')
+mainMap = urwid.AttrMap(mainTxt, None)
+mainFill = urwid.Filler(mainMap)
+mapbg = urwid.AttrMap(mainFill, 'mainbg')
+
+# Create header text
+headerText = urwid.Text(('headertxt', "--== OpenVAS scheduler v1.0 ==--"), align='center')
+headerbgMap = urwid.AttrMap(headerText, 'headerbg')
+
+# Create footer text
+footerText = urwid.Text(('footertxt',"q/Q=Quit"), align='right')
+footerbgMap = urwid.AttrMap(footerText, 'headerbg')
+
+# Create the Frame widget and couple the 3 widgets into it
+Frame = urwid.Frame(mapbg, header=headerbgMap, footer=footerbgMap, focus_part=mainMap)
+
+# Setup the MainLoop for urwid to create and run the GUI
+loop = urwid.MainLoop(Frame, palette, handle_mouse=False, unhandled_input=exit_on_q)
+
+# Start the background thraed to process data
+_thread.start_new_thread ( scheduleRun, ('', ''))
+# Start GUI loop
+loop.run()
