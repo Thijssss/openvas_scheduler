@@ -7,7 +7,7 @@
 # 18-08-2017
 #
 # Version:
-# 1.0
+# 1.1
 #
 # Authors:
 # Thijs Stuurman <thijs.stuurman@internedservices.nl>
@@ -24,13 +24,12 @@
 # case the (slave) scanner assignment per task is done beforehand on network
 # reachability.
 #
-# Known issues:
-# Using urwid for the console GUI but it does not nicely redraw the screen during
-# alarm # sequence (the check/update process). Scaling resets/works again when the
-# program is in it's Idle state.
+# Changelog:
+# v1.1: Added a filter to not schedule tasks with NOSCHED in their name
+# v1.0: Initial Release
 #
 # Additional information:
-#  - loopTimerSeconds = 300
+#  - loopTimerSeconds = 60
 #    Seconds to wait untill checking task information to try and run new tasks if
 #    resources are available
 #  - maxTasksPerSlave = 2
@@ -57,7 +56,7 @@ from dateutil.relativedelta import *
 daysEnabled = [0,1,2,3,4]   # days of the week during which the scheduler may start tasks
 hourStart = 9               # start tasks between ... hours
 hourStop = 17               # and ... hours
-loopTimerSeconds = 300      # Wait time between task status checks
+loopTimerSeconds = 60       # Wait time between task status checks
 maxTasksPerSlave = 2        # Max running tasks per (slave) scanner
 taskCount = 0               # task counter
 openvasTasksXML = None      # Object to dump the XML data
@@ -260,7 +259,8 @@ def processTasksXML():
                             runningTasks[taskName] = taskDetail.text
 
                 # Find lastrun information and decide if tasks needs to run
-                if taskDetail.tag == "last_report":
+                # Make sure we may schedule the task automatically (not containg in NOSHED)
+                if taskDetail.tag == "last_report" and "NOSHED" not in taskName:
                     for lastreport in taskDetail:
                         for reportDetails in lastreport:
                             if reportDetails.tag == "timestamp":
