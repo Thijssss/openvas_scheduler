@@ -4,10 +4,10 @@ This script is used to start tasks which haven't run in over a month.
 Use the gvm get_tasks() method to read in XML information about all the tasks.
 
 Release date:
-18-08-2017
+21-08-2017
 
 Version:
-1.0
+1.1
 
 Authors:
 Thijs Stuurman <thijs.stuurman@internedservices.nl>
@@ -24,13 +24,12 @@ The scheduler will not assign tasks to other (slave) scanners. In the authors
 case the (slave) scanner assignment per task is done beforehand on network
 reachability.
 
-Known issues:
-Using urwid for the console GUI but it does not nicely redraw the screen during
-alarm # sequence (the check/update process). Scaling resets/works again when the
-program is in it's Idle state.
+Changelog:
+v1.1: Added a filter to not schedule tasks with NOSCHED in their name
+v1.0: Initial Release
 
 Additional information:
- - loopTimerSeconds = 300
+ - loopTimerSeconds = 60
    Seconds to wait untill checking task information to try and run new tasks if
    resources are available
  - maxTasksPerSlave = 2
