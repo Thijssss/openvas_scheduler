@@ -294,7 +294,7 @@ mainFill = urwid.Filler(mainMap)
 mapbg = urwid.AttrMap(mainFill, 'mainbg')
 
 # Create header text
-headerText = urwid.Text(('headertxt', "--== OpenVAS scheduler v1.0 ==--"), align='center')
+headerText = urwid.Text(('headertxt', "--== OpenVAS scheduler v1.1 ==--"), align='center')
 headerbgMap = urwid.AttrMap(headerText, 'headerbg')
 
 # Create footer text
