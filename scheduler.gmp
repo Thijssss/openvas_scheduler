@@ -259,8 +259,8 @@ def processTasksXML():
                             runningTasks[taskName] = taskDetail.text
 
                 # Find lastrun information and decide if tasks needs to run
-                # Make sure we may schedule the task automatically (not containg in NOSHED)
-                if taskDetail.tag == "last_report" and "NOSHED" not in taskName:
+                # Make sure we may schedule the task automatically (not containg in NOSCHED)
+                if taskDetail.tag == "last_report" and "NOSCHED" not in taskName:
                     for lastreport in taskDetail:
                         for reportDetails in lastreport:
                             if reportDetails.tag == "timestamp":
