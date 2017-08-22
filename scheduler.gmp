@@ -177,10 +177,9 @@ def startTasks():
 
     #Remove space for jobs which are currently running
     for slaveName, runningtaskCount in tmpCount.items():
-        if runningtaskCount <= maxTasksPerSlave:
-            scanSlaveSpace[slaveName] = (maxTasksPerSlave - runningtaskCount)
-            if scanSlaveSpace[slaveName] == 0:
-                del scanSlaveSpace[slaveName]
+        scanSlaveSpace[slaveName] -= runningtaskCount
+        if scanSlaveSpace[slaveName] < 1:
+            del scanSlaveSpace[slaveName]
 
     #scanSlaveSpace now holds slavenames with resources left and how many
     while len(scanSlaveSpace) > 0 and len(todoTasks) > 0:
