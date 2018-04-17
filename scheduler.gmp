@@ -4,10 +4,10 @@
 # Use the gvm get_tasks() method to read in XML information about all the tasks.
 #
 # Release date:
-# 18-08-2017
+# 03-04-2018
 #
 # Version:
-# 1.1
+# 1.11
 #
 # Authors:
 # Thijs Stuurman <thijs.stuurman@internedservices.nl>
@@ -25,11 +25,12 @@
 # reachability.
 #
 # Changelog:
-# v1.1: Added a filter to not schedule tasks with NOSCHED in their name
-# v1.0: Initial Release
+# v1.11: Fixed a bug caused by having more tasks running than the max
+# v1.10: Added a filter to not schedule tasks with NOSCHED in their name
+# v1.00: Initial Release
 #
 # Additional information:
-#  - loopTimerSeconds = 60
+#  - loopTimerSeconds = 300
 #    Seconds to wait untill checking task information to try and run new tasks if
 #    resources are available
 #  - maxTasksPerSlave = 2
@@ -54,8 +55,8 @@ from dateutil.relativedelta import *
 
 # global variables
 daysEnabled = [0,1,2,3,4]   # days of the week during which the scheduler may start tasks
-hourStart = 9               # start tasks between ... hours
-hourStop = 17               # and ... hours
+hourStart = 8               # start tasks between ... hours
+hourStop = 19               # and ... hours
 loopTimerSeconds = 60       # Wait time between task status checks
 maxTasksPerSlave = 2        # Max running tasks per (slave) scanner
 taskCount = 0               # task counter
@@ -183,7 +184,6 @@ def startTasks():
 
     #scanSlaveSpace now holds slavenames with resources left and how many
     while len(scanSlaveSpace) > 0 and len(todoTasks) > 0:
-        time.sleep(1)
         # pop arbitrary todoTasks out of the dictionary
         taskItem = todoTasks.popitem()
         taskname = taskItem[0]
@@ -195,20 +195,32 @@ def startTasks():
                 time.sleep(1)
                 scanSlaveSpace[slaveName] -= 1
                 # start task
-                gmp.start_task(taskID)
+                try:
+                    gmp.start_task(taskID)
+                except:
+                    updateStatus("Error! GMP failed to start_tasks " + taskSlave[taskname] + " for task " + taskname + ", starting task with task ID: " + taskID)
                 if scanSlaveSpace[slaveName] == 0:
                     del scanSlaveSpace[slaveName]
-                time.sleep(3)   # avoid flood starting new jobs at once
+                time.sleep(10)   # avoid flood starting new jobs at once
 
 # Get the task XML information
 def updateTaskInformation():
     global openvasTasksXML
 
     updateStatus("Getting task and status information... (may take 30 seconds)")
-    openvasTasksXML = gmp.get_tasks()
-    updateStatus("Processing task and status information...")
+    tryStatus = 0
+    try:
+        openvasTasksXML = gmp.get_tasks()
+        tryStatus = 1
+    except:
+        updateStatus("Error while trying to receive task and status information.")
+        tryStatus = 0
+
+    if tryStatus == 1:
+        updateStatus("Processing task and status information...")
+        time.sleep(1)
+        processTasksXML()
     time.sleep(1)
-    processTasksXML()
 
 # Process tasks XML and fill dictonaries with required information
 def processTasksXML():
@@ -265,7 +277,11 @@ def processTasksXML():
                             if reportDetails.tag == "timestamp":
                                 dateString=reportDetails.text.split('T')[0]     #'2017-06-29T12:39:03+02:00'
                                 lastrunDatetimeObject = datetime.strptime(dateString,'%Y-%m-%d')
-                                monthOld = datetime.today() + relativedelta(months=-1)
+
+                                # We run monthly but sometimes a job isn't just yet a month old...
+                                #monthOld = datetime.today() + relativedelta(months=-1)
+                                monthOld = datetime.today() + relativedelta(weeks=-2)
+
                                 if lastrunDatetimeObject < monthOld:
                                     taskAge="old"
                                     if taskIdle == 1:
@@ -293,7 +309,7 @@ mainFill = urwid.Filler(mainMap)
 mapbg = urwid.AttrMap(mainFill, 'mainbg')
 
 # Create header text
-headerText = urwid.Text(('headertxt', "--== OpenVAS scheduler v1.1 ==--"), align='center')
+headerText = urwid.Text(('headertxt', "--== OpenVAS scheduler v1.11 ==--"), align='center')
 headerbgMap = urwid.AttrMap(headerText, 'headerbg')
 
 # Create footer text
