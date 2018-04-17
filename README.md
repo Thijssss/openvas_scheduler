@@ -4,10 +4,10 @@ This script is used to start tasks which haven't run in over a month.
 Use the gvm get_tasks() method to read in XML information about all the tasks.
 
 Release date:
-21-08-2017
+17-04-2018
 
 Version:
-1.1
+1.11
 
 Authors:
 Thijs Stuurman <thijs.stuurman@internedservices.nl>
@@ -25,8 +25,9 @@ case the (slave) scanner assignment per task is done beforehand on network
 reachability.
 
 Changelog:
-v1.1: Added a filter to not schedule tasks with NOSCHED in their name
-v1.0: Initial Release
+v1.11: Fixed a bug caused by having more tasks running than the max
+v1.10: Added a filter to not schedule tasks with NOSCHED in their name
+v1.00: Initial Release
 
 Additional information:
  - loopTimerSeconds = 60
